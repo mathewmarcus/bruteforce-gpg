@@ -20,7 +20,8 @@ gpgme_error_t bruteforce_gpg_read_passphrases_from_file(void *hook, const char *
 int main(int argc, char *argv[argc])
 {
   int option;
-  char *password_filename = NULL, *secret_key_filename, *fingerprint;
+  long num_threads;
+  char *password_filename = NULL, *secret_key_filename, *fingerprint, *endptr;
   gpgme_error_t err;
   gpgme_ctx_t context;
   gpgme_key_t secret_key;
@@ -30,12 +31,24 @@ int main(int argc, char *argv[argc])
   struct callback_data *data;
 
   opterr =  0;
-  while ((option = getopt(argc, argv, ":f:")) != -1) {
+  while ((option = getopt(argc, argv, "f:t:")) != -1) {
     switch (option) {
       case 'f': {
 	password_filename = optarg;
 	break;
       }
+      case 't':
+	num_threads = strtol(optarg, &endptr, 10);
+	if (errno == EINVAL || errno == ERANGE) {
+	  perror("Invalid argument to -t");
+	  exit(errno);
+	}
+
+	if (num_threads <= 0) {
+	  fprintf(stderr, "Argument to -t must be >= 1\n");
+	  exit(1);
+	}
+	break;
       case ':':
 	fprintf(stderr, "Option %c requires an argument", optopt);
 	exit(1);
