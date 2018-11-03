@@ -99,7 +99,10 @@ int main(int argc, char *argv[argc])
 
   printf("Pinentry mode set to loopback\n");
 
-  /* Set keylist mode to use local keyring(default) and include secret keys in the first iteration */
+  /*
+     Set keylist mode to use local keyring(default) and include secret keys in the first iteration
+     It is not strictly necessary to set this option
+  */
   err = gpgme_set_keylist_mode(context, GPGME_KEYLIST_MODE_LOCAL | GPGME_KEYLIST_MODE_WITH_SECRET);
   if (gpgme_err_code(err) != GPG_ERR_NO_ERROR) {
     gpgme_release(context);
@@ -285,7 +288,12 @@ int main(int argc, char *argv[argc])
     exit(gpgme_err_code(err));
   }
 
-  printf("\nFound passphrase: %s\n", data->line);
+  if (data->line)
+    printf("\nFound passphrase: %s\n", data->line);
+  else {
+    printf("Secret key passphrase for key %s is already cached in gpg-agent\n", fingerprint);
+    printf("Restart the agent with \"gpgconf --reload --gpg-agent\"\n\n");
+  }
 
   err = gpgme_op_delete_ext(context, secret_key, GPGME_DELETE_ALLOW_SECRET | GPGME_DELETE_FORCE);
   if (gpgme_err_code(err) != GPG_ERR_NO_ERROR) {
