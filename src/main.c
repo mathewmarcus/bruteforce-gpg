@@ -8,6 +8,7 @@
 #include <time.h>
 
 #define USAGE "%s -f password_file -t num_threads secret_key_file\n"
+#define ERR_BUF_LEN 500
 
 struct callback_data {
   FILE *password_file;
@@ -35,6 +36,7 @@ int main(int argc, char *argv[argc])
   char *password_filename = NULL, *secret_key_filename, *endptr;
   pthread_t *workers;
   gpgme_error_t err;
+  void *worker_err;
   struct thread_args gpg_data;
 
   num_threads = 16;
@@ -110,8 +112,12 @@ int main(int argc, char *argv[argc])
     gpg_data.num_workers++;
   }
 
-  for (int i = 0; i < num_threads; i++)
-    pthread_join(workers[i], NULL);
+  for (int i = 0; i < num_threads; i++) {
+    if (pthread_join(workers[i], &worker_err))
+      perror("Failed to join to worker thread");
+    else if ((gpgme_error_t*) worker_err)
+      free((gpgme_error_t*) worker_err);
+  }
   
 
   fprintf(stderr, "Passphrase not found\n");
@@ -152,15 +158,22 @@ void *bruteforce_gpg_crack_passphrase(void *args) {
   gpgme_data_t signature;
   gpgme_data_t secret_key_data;
   struct callback_data *data;
-  char *fingerprint;
+  char *fingerprint, *err_buf;
 
   struct thread_args *gpg_data = (struct thread_args *) args;
-  err = malloc(sizeof(gpgme_error_t));
+
+  if(!(err = malloc(sizeof(gpgme_error_t))))
+    return NULL;
+
+  if(!(err_buf = calloc(ERR_BUF_LEN, sizeof(char)))){
+    *err = errno;
+    return err;
+  }
 
   *err = gpgme_new(&context);
   if (gpgme_err_code(*err) != GPG_ERR_NO_ERROR) {
-    fprintf(stderr, "Context creation failed: %s\n",
-	    gpgme_strerror(*err));
+    gpgme_strerror_r(*err, err_buf, ERR_BUF_LEN);
+    fprintf(stderr, "Context creation failed: %s\n", err_buf);
     return err;
   }
 
@@ -170,9 +183,11 @@ void *bruteforce_gpg_crack_passphrase(void *args) {
   *err = gpgme_set_protocol(context, GPGME_PROTOCOL_OPENPGP);
   if (gpgme_err_code(*err) != GPG_ERR_NO_ERROR) {
     gpgme_release(context);
+    gpgme_strerror_r(*err, err_buf, ERR_BUF_LEN);
     fprintf(stderr, "Setting context to use %s protocol failed: %s\n",
 	    gpgme_get_protocol_name(GPGME_PROTOCOL_OPENPGP),
-	    gpgme_strerror(*err));
+	    err_buf);
+    free(err_buf);
     return err;
   }
 
@@ -182,8 +197,10 @@ void *bruteforce_gpg_crack_passphrase(void *args) {
   *err = gpgme_set_pinentry_mode(context, GPGME_PINENTRY_MODE_LOOPBACK);
   if (gpgme_err_code(*err) != GPG_ERR_NO_ERROR) {
     gpgme_release(context);
+    gpgme_strerror_r(*err, err_buf, ERR_BUF_LEN);
     fprintf(stderr, "Failed to set pinentry mode to loopback: %s\n",
-  	    gpgme_strerror(*err));
+  	    err_buf);
+    free(err_buf);
     return err;
   }
 
@@ -191,13 +208,14 @@ void *bruteforce_gpg_crack_passphrase(void *args) {
 
   /*
      Set keylist mode to use local keyring(default) and include secret keys in the first iteration
-     It is not strictly necessary to set this option
   */
   *err = gpgme_set_keylist_mode(context, GPGME_KEYLIST_MODE_LOCAL | GPGME_KEYLIST_MODE_WITH_SECRET);
   if (gpgme_err_code(*err) != GPG_ERR_NO_ERROR) {
     gpgme_release(context);
+    gpgme_strerror_r(*err, err_buf, ERR_BUF_LEN);
     fprintf(stderr, "Failed to set keylist mode to local with secret: %s\n",
-  	    gpgme_strerror(*err));
+  	    err_buf);
+    free(err_buf);
     return err;
   }
 
@@ -208,7 +226,9 @@ void *bruteforce_gpg_crack_passphrase(void *args) {
   if (!data) {
     gpgme_release(context);
     perror("Failed to allocate space for passphrase callback hook data");
-    exit(errno);
+    *err = errno;
+    free(err_buf);
+    return err;
   }
   gpgme_set_passphrase_cb(context, bruteforce_gpg_read_passphrases_from_file, data);
 
@@ -217,9 +237,11 @@ void *bruteforce_gpg_crack_passphrase(void *args) {
   if (gpgme_err_code(*err) != GPG_ERR_NO_ERROR) {
     gpgme_release(context);
     free(data);
+    gpgme_strerror_r(*err, err_buf, ERR_BUF_LEN);
     fprintf(stderr, "Failed to load secret key from %s: %s\n",
 	    gpg_data->secret_key_filename,
-	    gpgme_strerror(*err));
+	    err_buf);
+    free(err_buf);
     return err;
   }
 
@@ -231,8 +253,10 @@ void *bruteforce_gpg_crack_passphrase(void *args) {
     gpgme_data_release(secret_key_data);
     gpgme_release(context);
     free(data);
+    gpgme_strerror_r(*err, err_buf, ERR_BUF_LEN);
     fprintf(stderr, "Failed to import secret key from gpg data buffer: %s\n",
-	    gpgme_strerror(*err));
+	    err_buf);
+    free(err_buf);
     return err;
   }
 
@@ -247,6 +271,7 @@ void *bruteforce_gpg_crack_passphrase(void *args) {
 	    result->imported,
 	    gpg_data->secret_key_filename);
     *err = GPG_ERR_GENERAL;
+    free(err_buf);
     return err;
   }
 
@@ -257,6 +282,7 @@ void *bruteforce_gpg_crack_passphrase(void *args) {
     fprintf(stderr, "Secret key file %s only contains public key \n",
 	    gpg_data->secret_key_filename);
     *err = GPG_ERR_GENERAL;
+    free(err_buf);
     return err;
   }
 
@@ -290,7 +316,9 @@ void *bruteforce_gpg_crack_passphrase(void *args) {
     gpgme_data_release(secret_key_data);
     gpgme_release(context);
     free(data);
-    fprintf(stderr, "Failed to get secret key: %s\n", gpgme_strerror(*err));
+    gpgme_strerror_r(*err, err_buf, ERR_BUF_LEN);
+    fprintf(stderr, "Failed to get secret key: %s\n", err_buf);
+    free(err_buf);
     return err;
   }
 
@@ -303,7 +331,9 @@ void *bruteforce_gpg_crack_passphrase(void *args) {
     gpgme_data_release(secret_key_data);
     gpgme_release(context);
     free(data);
-    fprintf(stderr, "Failed to add signing key to context: %s\n", gpgme_strerror(*err));
+    gpgme_strerror_r(*err, err_buf, ERR_BUF_LEN);
+    fprintf(stderr, "Failed to add signing key to context: %s\n", err_buf);
+    free(err_buf);
     return err;
   }
 
@@ -317,7 +347,9 @@ void *bruteforce_gpg_crack_passphrase(void *args) {
     gpgme_data_release(secret_key_data);
     free(data);
     gpgme_release(context);
-    fprintf(stderr, "Failed to create signing buffer: %s\n", gpgme_strerror(*err));
+    gpgme_strerror_r(*err, err_buf, ERR_BUF_LEN);
+    fprintf(stderr, "Failed to create signing buffer: %s\n", err_buf);
+    free(err_buf);
     return err;
   }
 
@@ -331,8 +363,10 @@ void *bruteforce_gpg_crack_passphrase(void *args) {
     gpgme_data_release(secret_key_data);
     free(data);
     gpgme_release(context);
-    fprintf(stderr, "Failed to create signature buffer: %s\n", gpgme_strerror(*err));
-    exit(gpgme_err_code(*err));
+    gpgme_strerror_r(*err, err_buf, ERR_BUF_LEN);
+    fprintf(stderr, "Failed to create signature buffer: %s\n", err_buf);
+    free(err_buf);
+    return err;
   }
 
   printf("Created signature buffer\n");
@@ -363,7 +397,9 @@ void *bruteforce_gpg_crack_passphrase(void *args) {
     gpgme_data_release(secret_key_data);
     free(data);
     gpgme_release(context);
-    fprintf(stderr, "Secret key decryption failed: %s\n", gpgme_strerror(*err));
+    gpgme_strerror_r(*err, err_buf, ERR_BUF_LEN);
+    fprintf(stderr, "Secret key decryption failed: %s\n", err_buf);
+    free(err_buf);
     return err;
   }
 
@@ -388,7 +424,9 @@ void *bruteforce_gpg_crack_passphrase(void *args) {
     fclose(data->password_file);
     free(data);
     gpgme_release(context);
-    fprintf(stderr, "Key deletion failed: %s\n", gpgme_strerror(*err));
+    gpgme_strerror_r(*err, err_buf, ERR_BUF_LEN);
+    fprintf(stderr, "Key deletion failed: %s\n", err_buf);
+    free(err_buf);
     return err;
   }
 
@@ -404,7 +442,7 @@ void *bruteforce_gpg_crack_passphrase(void *args) {
   fclose(data->password_file);
   free(data);
   gpgme_release(context);
-
-  
+  free(err_buf); 
+ 
   return NULL;
 }
