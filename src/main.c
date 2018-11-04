@@ -1,36 +1,13 @@
-#include <gpgme.h>
 #include <getopt.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <errno.h>
-#include <pthread.h>
-#include <time.h>
+#include "bruteforce_gpg.h"
 
-#define USAGE "%s -f password_file -t num_threads secret_key_file\n"
-#define ERR_BUF_LEN 500
+/*
+  TODO:
+    1. Disable password caching in gpg-agent
+    2. Signal handling
+    3. DEBUG level logging via -v option
+*/
 
-struct callback_data {
-  FILE *password_file;
-  unsigned int attempt;
-  char *line;
-  size_t line_length;
-};
-
-struct thread_args {
-  FILE *wordlist;
-  char *secret_key_filename;
-  time_t start_time;
-  pthread_t *workers;
-  long num_workers;
-};
-
-static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
-
-
-
-gpgme_error_t bruteforce_gpg_read_passphrases_from_file(void *hook, const char *uid_hint, const char *passphrase_info, int prev_was_bad, int fd);
-void *bruteforce_gpg_crack_passphrase(void *args);
 int main(int argc, char *argv[argc])
 {
   int option;
@@ -40,6 +17,7 @@ int main(int argc, char *argv[argc])
   gpgme_error_t err;
   void *worker_err;
   struct thread_args gpg_data;
+  time_t start_time;
 
   num_threads = 1;
   opterr =  0;
@@ -85,11 +63,6 @@ int main(int argc, char *argv[argc])
     exit(errno);
   }
 
-  gpg_data.secret_key_filename = secret_key_filename;
-  gpg_data.num_workers = 0;
-  workers = calloc(num_threads, sizeof(pthread_t));
-  gpg_data.workers = workers;
-
   /* Initialize thread subsystem */
   gpgme_check_version(NULL);
 
@@ -104,7 +77,17 @@ int main(int argc, char *argv[argc])
   
   printf("%s engine supported!\n", gpgme_get_protocol_name(GPGME_PROTOCOL_OPENPGP));
 
-  gpg_data.start_time = time(NULL);
+  gpg_data.fingerprint = NULL;
+  if (!bruteforce_gpg_load_secret_key(secret_key_filename, &gpg_data.fingerprint))
+    exit(1);
+
+  gpg_data.attempt = 0;
+  gpg_data.passphrase = NULL;
+  gpg_data.num_workers = 0;
+  workers = calloc(num_threads, sizeof(pthread_t));
+  gpg_data.workers = workers;
+
+  start_time = time(NULL);
   for (int i = 0; i < num_threads; i++) {
     if (pthread_create(workers + i, NULL, bruteforce_gpg_crack_passphrase, &gpg_data)) {
       perror("Failed to create at least one of the worker threads");
@@ -114,355 +97,19 @@ int main(int argc, char *argv[argc])
     gpg_data.num_workers++;
   }
 
-  for (int i = 0; i < num_threads; i++) {
+  for (int i = 0; i < num_threads; i++)
     if (pthread_join(workers[i], &worker_err))
       perror("Failed to join to worker thread");
-    else if ((gpgme_error_t*) worker_err)
-      free((gpgme_error_t*) worker_err);
-  }
   
+  if (gpg_data.passphrase) {
+    printf("\nFound passphrase: %s\n", gpg_data.passphrase);
+    printf("Duration: %lu seconds\n", gpg_data.end_time - start_time);
+  }
+  else
+    fprintf(stderr, "Passphrase not found\n");
 
-  fprintf(stderr, "Passphrase not found\n");
   fclose(gpg_data.wordlist);
+  free(gpg_data.fingerprint);
   free(workers);
-  return 1;
-}
-
-gpgme_error_t bruteforce_gpg_read_passphrases_from_file(void *hook, const char *uid_hint, const char *passphrase_info, int prev_was_bad, int fd) {
-  struct callback_data *data = (struct callback_data *) hook;
-
-  pthread_mutex_lock(&mutex);
-  if (getline(&(data->line), &(data->line_length), data->password_file) == -1) {
-    free(data->line);
-    perror("Failed to read password file");
-    return GPG_ERR_CANCELED;
-  }
-
-  printf("%u passwords attmpted\r", ++data->attempt);
-  fflush(stdout);
-
-  pthread_mutex_unlock(&mutex);
-
-  if (gpgme_io_writen(fd, data->line, data->line_length) == -1) {
-    free(data->line);
-    fprintf(stderr, "Failed to write password %s: %s\n",
-  	    data->line,
-  	    strerror(errno));
-    return GPG_ERR_CANCELED;
-  }
-
-  return GPG_ERR_NO_ERROR;
-}
-
-void *bruteforce_gpg_crack_passphrase(void *args) {
-  gpgme_error_t *err;
-  gpgme_ctx_t context;
-  gpgme_key_t secret_key;
-  gpgme_data_t signing_data;
-  gpgme_data_t signature;
-  gpgme_data_t secret_key_data;
-  struct callback_data *data;
-  char *fingerprint, *err_buf;
-
-  struct thread_args *gpg_data = (struct thread_args *) args;
-
-  if(!(err = malloc(sizeof(gpgme_error_t))))
-    return NULL;
-
-  if(!(err_buf = calloc(ERR_BUF_LEN, sizeof(char)))){
-    *err = errno;
-    return err;
-  }
-
-  *err = gpgme_new(&context);
-  if (gpgme_err_code(*err) != GPG_ERR_NO_ERROR) {
-    gpgme_strerror_r(*err, err_buf, ERR_BUF_LEN);
-    fprintf(stderr, "Context creation failed: %s\n", err_buf);
-    return err;
-  }
-
-  printf("Context created!\n");
-
-  /* Ensure protocol is set to pgp */
-  *err = gpgme_set_protocol(context, GPGME_PROTOCOL_OPENPGP);
-  if (gpgme_err_code(*err) != GPG_ERR_NO_ERROR) {
-    gpgme_release(context);
-    gpgme_strerror_r(*err, err_buf, ERR_BUF_LEN);
-    fprintf(stderr, "Setting context to use %s protocol failed: %s\n",
-	    gpgme_get_protocol_name(GPGME_PROTOCOL_OPENPGP),
-	    err_buf);
-    free(err_buf);
-    return err;
-  }
-
-  printf("Context set to %s\n", gpgme_get_protocol_name(GPGME_PROTOCOL_OPENPGP));
-
-  /* Set pinentry mode to allow non-interactive reading of passphrase(s) */
-  *err = gpgme_set_pinentry_mode(context, GPGME_PINENTRY_MODE_LOOPBACK);
-  if (gpgme_err_code(*err) != GPG_ERR_NO_ERROR) {
-    gpgme_release(context);
-    gpgme_strerror_r(*err, err_buf, ERR_BUF_LEN);
-    fprintf(stderr, "Failed to set pinentry mode to loopback: %s\n",
-  	    err_buf);
-    free(err_buf);
-    return err;
-  }
-
-  printf("Pinentry mode set to loopback\n");
-
-  /*
-     Set keylist mode to use local keyring(default) and include secret keys in the first iteration
-  */
-  *err = gpgme_set_keylist_mode(context, GPGME_KEYLIST_MODE_LOCAL | GPGME_KEYLIST_MODE_WITH_SECRET);
-  if (gpgme_err_code(*err) != GPG_ERR_NO_ERROR) {
-    gpgme_release(context);
-    gpgme_strerror_r(*err, err_buf, ERR_BUF_LEN);
-    fprintf(stderr, "Failed to set keylist mode to local with secret: %s\n",
-  	    err_buf);
-    free(err_buf);
-    return err;
-  }
-
-  printf("Keylist mode set to local with secret\n");
-
-  /* Set passphrase callback */
-  data = malloc(sizeof(struct callback_data));
-  if (!data) {
-    gpgme_release(context);
-    perror("Failed to allocate space for passphrase callback hook data");
-    *err = errno;
-    free(err_buf);
-    return err;
-  }
-  gpgme_set_passphrase_cb(context, bruteforce_gpg_read_passphrases_from_file, data);
-
-  /* Read secret key into data buffer */
-  *err = gpgme_data_new_from_file(&secret_key_data, gpg_data->secret_key_filename, 1);
-  if (gpgme_err_code(*err) != GPG_ERR_NO_ERROR) {
-    gpgme_release(context);
-    free(data);
-    gpgme_strerror_r(*err, err_buf, ERR_BUF_LEN);
-    fprintf(stderr, "Failed to load secret key from %s: %s\n",
-	    gpg_data->secret_key_filename,
-	    err_buf);
-    free(err_buf);
-    return err;
-  }
-
-  printf("Loaded secret key data from file %s\n", gpg_data->secret_key_filename);
-
-  /* Load secret key from gpg data buffer */
-  *err = gpgme_op_import(context, secret_key_data);
-  if (gpgme_err_code(*err) != GPG_ERR_NO_ERROR) {
-    gpgme_data_release(secret_key_data);
-    gpgme_release(context);
-    free(data);
-    gpgme_strerror_r(*err, err_buf, ERR_BUF_LEN);
-    fprintf(stderr, "Failed to import secret key from gpg data buffer: %s\n",
-	    err_buf);
-    free(err_buf);
-    return err;
-  }
-
-  printf("Imported secret key from gpg data buffer\n");
-  gpgme_import_result_t result = gpgme_op_import_result(context);
-
-  if (result->imported != 1) {
-    gpgme_data_release(secret_key_data);
-    gpgme_release(context);
-    free(data);
-    fprintf(stderr, "Secret key file must contain exactly one key, found %i in %s\n",
-	    result->imported,
-	    gpg_data->secret_key_filename);
-    *err = GPG_ERR_GENERAL;
-    free(err_buf);
-    return err;
-  }
-
-  if (result->secret_imported != 1) {
-    gpgme_data_release(secret_key_data);
-    gpgme_release(context);
-    free(data);
-    fprintf(stderr, "Secret key file %s only contains public key \n",
-	    gpg_data->secret_key_filename);
-    *err = GPG_ERR_GENERAL;
-    free(err_buf);
-    return err;
-  }
-
-  printf("Considered: %i\n", result->considered);
-  printf("No user id: %i\n", result->no_user_id);
-  printf("Imported: %i\n", result->imported);
-  printf("RSA %i\n", result->imported_rsa);
-  printf("Unchanged: %i\n", result->unchanged);
-  printf("New user IDs: %i\n", result->new_user_ids);
-  printf("New sub keys: %i\n", result->new_sub_keys);
-  printf("New signatures: %i\n", result->new_signatures);
-  printf("New revocations: %i\n", result->new_revocations);
-  printf("Secret keys read: %i\n", result->secret_read);
-  printf("Secret keys imported: %i\n", result->secret_imported);
-  printf("Secret keys unchanged: %i\n", result->secret_unchanged);
-  printf("Not imported: %i\n", result->not_imported);
-  printf("Fingerprint: %s\n", result->imports->fpr);
-
-  fingerprint = strndup(result->imports->fpr, 40);
-  if (!fingerprint) {
-    gpgme_data_release(secret_key_data);
-    gpgme_release(context);
-    free(data);
-    perror("Failed to allocate space for key fingerprint\n");
-    exit(errno);
-  }
-  /* Get secret key */
-  *err = gpgme_get_key(context, fingerprint, &secret_key, 1);
-  if (gpgme_err_code(*err) != GPG_ERR_NO_ERROR) {
-    free(fingerprint);
-    gpgme_data_release(secret_key_data);
-    gpgme_release(context);
-    free(data);
-    gpgme_strerror_r(*err, err_buf, ERR_BUF_LEN);
-    fprintf(stderr, "Failed to get secret key: %s\n", err_buf);
-    free(err_buf);
-    return err;
-  }
-
-  printf("Got secret key\n");
-
-  /* Set key as signing key */
-  *err = gpgme_signers_add(context, secret_key);
-  if (gpgme_err_code(*err) != GPG_ERR_NO_ERROR) {
-    free(fingerprint);
-    gpgme_data_release(secret_key_data);
-    gpgme_release(context);
-    free(data);
-    gpgme_strerror_r(*err, err_buf, ERR_BUF_LEN);
-    fprintf(stderr, "Failed to add signing key to context: %s\n", err_buf);
-    free(err_buf);
-    return err;
-  }
-
-  printf("Added secret key as signing key in context\n");
-
-  /* Create buffer of data to sign */
-  *err = gpgme_data_new_from_mem(&signing_data, "test", 4, 0);
-  if (gpgme_err_code(*err) != GPG_ERR_NO_ERROR) {
-    free(fingerprint);
-    gpgme_signers_clear(context);
-    gpgme_data_release(secret_key_data);
-    free(data);
-    gpgme_release(context);
-    gpgme_strerror_r(*err, err_buf, ERR_BUF_LEN);
-    fprintf(stderr, "Failed to create signing buffer: %s\n", err_buf);
-    free(err_buf);
-    return err;
-  }
-
-  printf("Created signing buffer\n");
-
-  *err = gpgme_data_new(&signature);
-  if (gpgme_err_code(*err) != GPG_ERR_NO_ERROR) {
-    free(fingerprint);
-    gpgme_data_release(signing_data);
-    gpgme_signers_clear(context);
-    gpgme_data_release(secret_key_data);
-    free(data);
-    gpgme_release(context);
-    gpgme_strerror_r(*err, err_buf, ERR_BUF_LEN);
-    fprintf(stderr, "Failed to create signature buffer: %s\n", err_buf);
-    free(err_buf);
-    return err;
-  }
-
-  printf("Created signature buffer\n");
-
-  data->attempt = 0;
-  data->line = NULL;
-  data->line_length = 0;
-  data->password_file = gpg_data->wordlist;
-
-  /* Sign any data
-
-     The loop logic is necessary because the user-supplied passphrase callback function is
-     not re-invoked for failed passphrase attempts (like the default pinentry callback)
-  */
-  do
-    {
-      *err = gpgme_op_sign(context, signing_data, signature, GPGME_SIG_MODE_DETACH);
-    } while (gpgme_err_code(*err) == GPG_ERR_BAD_PASSPHRASE);
-
-  
-  if (gpgme_err_code(*err) != GPG_ERR_NO_ERROR && gpgme_err_code(*err) != GPG_ERR_CANCELED) {
-    free(fingerprint);
-    gpgme_data_release(signature);
-    gpgme_data_release(signing_data);
-    gpgme_signers_clear(context);
-    gpgme_data_release(secret_key_data);
-    free(data);
-    gpgme_release(context);
-    gpgme_strerror_r(*err, err_buf, ERR_BUF_LEN);
-    fprintf(stderr, "Secret key decryption failed: %s\n", err_buf);
-    free(err_buf);
-    return err;
-  }
-
-  if (data->line) {
-    fclose(data->password_file);
-    printf("\nFound passphrase: %s\n", data->line);
-    printf("Duration: %lu seconds\n", time(NULL) - gpg_data->start_time);
-    free(fingerprint);
-    gpgme_data_release(signature);
-    gpgme_data_release(signing_data);
-    gpgme_signers_clear(context);
-    gpgme_data_release(secret_key_data);
-    free(data->line);
-    free(data);
-    gpgme_release(context);
-    free(err_buf); 
-    exit(0);
-  }
-  else if (data->attempt == 0) {
-    fclose(data->password_file);
-    printf("Secret key passphrase for key %s is already cached in gpg-agent\n", fingerprint);
-    printf("Restart the agent with \"gpgconf --reload gpg-agent\"\n\n");
-    free(fingerprint);
-    gpgme_data_release(signature);
-    gpgme_data_release(signing_data);
-    gpgme_signers_clear(context);
-    gpgme_data_release(secret_key_data);
-    free(data->line);
-    free(data);
-    gpgme_release(context);
-    free(err_buf); 
-    exit(0);
-  }
-
-  *err = gpgme_op_delete_ext(context, secret_key, GPGME_DELETE_ALLOW_SECRET | GPGME_DELETE_FORCE);
-  if (gpgme_err_code(*err) != GPG_ERR_NO_ERROR) {
-    free(fingerprint);
-    gpgme_data_release(signature);
-    gpgme_data_release(signing_data);
-    gpgme_signers_clear(context);
-    gpgme_data_release(secret_key_data);
-    free(data->line);
-    free(data);
-    gpgme_release(context);
-    gpgme_strerror_r(*err, err_buf, ERR_BUF_LEN);
-    fprintf(stderr, "Key deletion failed: %s\n", err_buf);
-    free(err_buf);
-    return err;
-  }
-
-  printf("Key deleted from keyring\n");
-
-  free(fingerprint);
-  gpgme_data_release(signature);
-  gpgme_data_release(signing_data);
-  gpgme_signers_clear(context);
-  gpgme_data_release(secret_key_data);
-  free(data->line);
-  free(data);
-  gpgme_release(context);
-  free(err_buf); 
- 
-  return NULL;
+  return gpg_data.passphrase != NULL;
 }
