@@ -25,6 +25,8 @@ struct thread_args {
   long num_workers;
 };
 
+static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+
 
 
 gpgme_error_t bruteforce_gpg_read_passphrases_from_file(void *hook, const char *uid_hint, const char *passphrase_info, int prev_was_bad, int fd);
@@ -39,7 +41,7 @@ int main(int argc, char *argv[argc])
   void *worker_err;
   struct thread_args gpg_data;
 
-  num_threads = 16;
+  num_threads = 1;
   opterr =  0;
   while ((option = getopt(argc, argv, "f:t:")) != -1) {
     switch (option) {
@@ -121,6 +123,7 @@ int main(int argc, char *argv[argc])
   
 
   fprintf(stderr, "Passphrase not found\n");
+  fclose(gpg_data.wordlist);
   free(workers);
   return 1;
 }
@@ -128,9 +131,9 @@ int main(int argc, char *argv[argc])
 gpgme_error_t bruteforce_gpg_read_passphrases_from_file(void *hook, const char *uid_hint, const char *passphrase_info, int prev_was_bad, int fd) {
   struct callback_data *data = (struct callback_data *) hook;
 
+  pthread_mutex_lock(&mutex);
   if (getline(&(data->line), &(data->line_length), data->password_file) == -1) {
     free(data->line);
-    fclose(data->password_file);
     perror("Failed to read password file");
     return GPG_ERR_CANCELED;
   }
@@ -138,9 +141,10 @@ gpgme_error_t bruteforce_gpg_read_passphrases_from_file(void *hook, const char *
   printf("%u passwords attmpted\r", ++data->attempt);
   fflush(stdout);
 
+  pthread_mutex_unlock(&mutex);
+
   if (gpgme_io_writen(fd, data->line, data->line_length) == -1) {
     free(data->line);
-    fclose(data->password_file);
     fprintf(stderr, "Failed to write password %s: %s\n",
   	    data->line,
   	    strerror(errno));
@@ -371,7 +375,6 @@ void *bruteforce_gpg_crack_passphrase(void *args) {
 
   printf("Created signature buffer\n");
 
-  /* Open password_file */
   data->attempt = 0;
   data->line = NULL;
   data->line_length = 0;
@@ -388,9 +391,8 @@ void *bruteforce_gpg_crack_passphrase(void *args) {
     } while (gpgme_err_code(*err) == GPG_ERR_BAD_PASSPHRASE);
 
   
-  if (gpgme_err_code(*err) != GPG_ERR_NO_ERROR) {
+  if (gpgme_err_code(*err) != GPG_ERR_NO_ERROR && gpgme_err_code(*err) != GPG_ERR_CANCELED) {
     free(fingerprint);
-    fclose(data->password_file);
     gpgme_data_release(signature);
     gpgme_data_release(signing_data);
     gpgme_signers_clear(context);
@@ -404,24 +406,44 @@ void *bruteforce_gpg_crack_passphrase(void *args) {
   }
 
   if (data->line) {
+    fclose(data->password_file);
     printf("\nFound passphrase: %s\n", data->line);
     printf("Duration: %lu seconds\n", time(NULL) - gpg_data->start_time);
-  }
-  else {
-    printf("Secret key passphrase for key %s is already cached in gpg-agent\n", fingerprint);
-    printf("Restart the agent with \"gpgconf --reload --gpg-agent\"\n\n");
-  }
-
-  *err = gpgme_op_delete_ext(context, secret_key, GPGME_DELETE_ALLOW_SECRET | GPGME_DELETE_FORCE);
-  if (gpgme_err_code(*err) != GPG_ERR_NO_ERROR) {
     free(fingerprint);
-    fclose(data->password_file);
     gpgme_data_release(signature);
     gpgme_data_release(signing_data);
     gpgme_signers_clear(context);
     gpgme_data_release(secret_key_data);
     free(data->line);
+    free(data);
+    gpgme_release(context);
+    free(err_buf); 
+    exit(0);
+  }
+  else if (data->attempt == 0) {
     fclose(data->password_file);
+    printf("Secret key passphrase for key %s is already cached in gpg-agent\n", fingerprint);
+    printf("Restart the agent with \"gpgconf --reload gpg-agent\"\n\n");
+    free(fingerprint);
+    gpgme_data_release(signature);
+    gpgme_data_release(signing_data);
+    gpgme_signers_clear(context);
+    gpgme_data_release(secret_key_data);
+    free(data->line);
+    free(data);
+    gpgme_release(context);
+    free(err_buf); 
+    exit(0);
+  }
+
+  *err = gpgme_op_delete_ext(context, secret_key, GPGME_DELETE_ALLOW_SECRET | GPGME_DELETE_FORCE);
+  if (gpgme_err_code(*err) != GPG_ERR_NO_ERROR) {
+    free(fingerprint);
+    gpgme_data_release(signature);
+    gpgme_data_release(signing_data);
+    gpgme_signers_clear(context);
+    gpgme_data_release(secret_key_data);
+    free(data->line);
     free(data);
     gpgme_release(context);
     gpgme_strerror_r(*err, err_buf, ERR_BUF_LEN);
@@ -433,13 +455,11 @@ void *bruteforce_gpg_crack_passphrase(void *args) {
   printf("Key deleted from keyring\n");
 
   free(fingerprint);
-  fclose(data->password_file);
   gpgme_data_release(signature);
   gpgme_data_release(signing_data);
   gpgme_signers_clear(context);
   gpgme_data_release(secret_key_data);
   free(data->line);
-  fclose(data->password_file);
   free(data);
   gpgme_release(context);
   free(err_buf); 
