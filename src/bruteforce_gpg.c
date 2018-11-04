@@ -86,8 +86,7 @@ gpgme_error_t bruteforce_gpg_read_passphrases_from_file(void *hook, const char *
 
   pthread_mutex_lock(&mutex);
   if (getline(&(data->line), &(data->line_length), data->password_file) == -1) {
-    free(data->line);
-    perror("Failed to read password file");
+    pthread_mutex_unlock(&mutex);
     return GPG_ERR_CANCELED;
   }
 
@@ -252,14 +251,13 @@ void *bruteforce_gpg_crack_passphrase(void *args) {
     {
       err = gpgme_op_sign(context, signing_data, signature, GPGME_SIG_MODE_DETACH);
     } while (gpgme_err_code(err) == GPG_ERR_BAD_PASSPHRASE && !gpg_data->passphrase);
-  
+
+  pthread_mutex_lock(&mutex);
   if (gpgme_err_code(err) != GPG_ERR_NO_ERROR && !gpg_data->passphrase) {
     gpgme_strerror_r(err, err_buf, ERR_BUF_LEN);
     fprintf(stderr, "Secret key decryption failed: %s\n", err_buf);
   }
-
-  pthread_mutex_lock(&mutex);
-  if (data->line && !gpg_data->passphrase) {
+  else if (data->line && !gpg_data->passphrase) {
     gpg_data->end_time = time(NULL);
     gpg_data->passphrase = data->line;
   }
