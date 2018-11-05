@@ -90,7 +90,7 @@ gpgme_error_t bruteforce_gpg_read_passphrases_from_file(void *hook, const char *
     return GPG_ERR_CANCELED;
   }
 
-  printf("%u passwords attmpted\r", ++(*data->attempt));
+  printf("%u passwords attempted\r", ++(*data->attempt));
   fflush(stdout);
   
   pthread_mutex_unlock(&mutex);
