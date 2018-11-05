@@ -13,6 +13,11 @@ bruteforce-gpg [-h] [-v] [-t NUM_THREADS] -f WORDLIST GPG_SECRET_KEY
 
 This tool depends on the [libgpgme](https://www.gnupg.org/software/gpgme/index.html) library.
 
+On Kali
+```bash
+$ sudo apt install libgpgme-dev
+```
+
 On Arch Linux
 ```bash
 $ sudo pacman -S gpgme
