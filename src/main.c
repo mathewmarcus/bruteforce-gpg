@@ -1,6 +1,7 @@
 #include <getopt.h>
 #include "bruteforce_gpg.h"
 #include "log.h"
+#include "agent.h"
 
 /*
   TODO:
@@ -13,7 +14,7 @@ int main(int argc, char *argv[argc])
 {
   int option;
   long num_threads;
-  char *password_filename = NULL, *secret_key_filename, *endptr;
+  char *password_filename = NULL, *secret_key_filename, *endptr, *ttl = NULL;
   pthread_t *workers;
   gpgme_error_t err;
   void *worker_err;
@@ -98,6 +99,12 @@ int main(int argc, char *argv[argc])
   workers = calloc(num_threads, sizeof(pthread_t));
   gpg_data.workers = workers;
 
+  
+  get_gpg_agent_cache_info(&ttl);
+  log_debug("Got existing gpg-agent default-cache-ttl: %s\n", ttl);
+  set_gpg_agent_cache_info("0");
+  log_debug("Set gpg-agent default-cache-ttl to 0\n");
+
   start_time = time(NULL);
   for (int i = 0; i < num_threads; i++) {
     if (pthread_create(workers + i, NULL, bruteforce_gpg_crack_passphrase, &gpg_data)) {
@@ -121,6 +128,9 @@ int main(int argc, char *argv[argc])
   }
   printf("Duration: %lu seconds\n", gpg_data.end_time - start_time);
 
+  set_gpg_agent_cache_info(ttl);
+  log_debug("Reverted gpg-agent default-cache-ttl to %s\n", ttl);
+  free(ttl);
   fclose(gpg_data.wordlist);
   free(gpg_data.fingerprint);
   free(workers);

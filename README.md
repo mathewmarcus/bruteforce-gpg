@@ -44,12 +44,6 @@ $ make
 make install
 ```
 
-### 5. Disable gpg-agent passphrase caching
-
-```bash
-$ echo 'default-cache-ttl::0' | gpgconf --change-options gpg-agent
-```
-
 ## Examples
 With the default (i.e. 1) threads
 
