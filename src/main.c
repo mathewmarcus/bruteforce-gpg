@@ -21,7 +21,7 @@ int main(int argc, char *argv[argc])
 
   num_threads = 1;
   opterr =  0;
-  while ((option = getopt(argc, argv, "f:t:")) != -1) {
+  while ((option = getopt(argc, argv, "hf:t:")) != -1) {
     switch (option) {
       case 'f': {
 	password_filename = optarg;
@@ -39,6 +39,9 @@ int main(int argc, char *argv[argc])
 	  exit(1);
 	}
 	break;
+      case 'h':
+	fprintf(stderr, USAGE, argv[0]);
+	exit(0);
       case ':':
 	fprintf(stderr, "Option %c requires an argument", optopt);
 	exit(1);

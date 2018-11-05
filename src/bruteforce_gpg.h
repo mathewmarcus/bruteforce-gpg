@@ -6,7 +6,7 @@
 #include <pthread.h>
 #include <time.h>
 
-#define USAGE "%s -f password_file -t num_threads secret_key_file\n"
+#define USAGE "%s [-h] [-t NUM_THREADS] -f WORDLIST GPG_SECRET_KEY\n"
 #define ERR_BUF_LEN 500
 
 struct callback_data {
