@@ -5,7 +5,7 @@ This is a tool used to recover the passphrase of a GPG secret (a.k.a private) ke
 ## Usage
 
 ```
-`bruteforce-gpg` [-h] [-t NUM_THREADS] -f WORDLIST GPG_SECRET_KEY
+bruteforce-gpg [-h] [-v] [-t NUM_THREADS] -f WORDLIST GPG_SECRET_KEY
 ```
 
 ## Setup
@@ -33,7 +33,7 @@ $ make
 
 ### 4. Install
 
-bruteforce-gpg will be installed in the `/usr/local/bin` directory, so you may want to ensure it is included in your `PATH` environment variable.
+`bruteforce-gpg` will be installed in the `/usr/local/bin/` directory, so you may want to ensure it is included in your `PATH` environment variable.
 
 ```bash
 make install
