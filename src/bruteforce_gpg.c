@@ -1,4 +1,5 @@
 #include "bruteforce_gpg.h"
+#include "log.h"
 
 static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 
@@ -24,7 +25,7 @@ char *bruteforce_gpg_load_secret_key(char *secret_key_filename, char **fingerpri
     return NULL;
   }
 
-  printf("Loaded secret key data from file %s\n", secret_key_filename);
+  log_debug("Loaded secret key data from file %s\n", secret_key_filename);
 
   /* Load secret key from gpg data buffer */
   err = gpgme_op_import(context, secret_key_data);
@@ -36,7 +37,7 @@ char *bruteforce_gpg_load_secret_key(char *secret_key_filename, char **fingerpri
     return NULL;
   }
 
-  printf("Imported secret key from gpg data buffer\n");
+  log_debug("Imported secret key from gpg data buffer\n");
   gpgme_import_result_t result = gpgme_op_import_result(context);
 
   if (result->imported != 1) {
@@ -56,20 +57,20 @@ char *bruteforce_gpg_load_secret_key(char *secret_key_filename, char **fingerpri
     return NULL;
   }
 
-  printf("Considered: %i\n", result->considered);
-  printf("No user id: %i\n", result->no_user_id);
-  printf("Imported: %i\n", result->imported);
-  printf("RSA %i\n", result->imported_rsa);
-  printf("Unchanged: %i\n", result->unchanged);
-  printf("New user IDs: %i\n", result->new_user_ids);
-  printf("New sub keys: %i\n", result->new_sub_keys);
-  printf("New signatures: %i\n", result->new_signatures);
-  printf("New revocations: %i\n", result->new_revocations);
-  printf("Secret keys read: %i\n", result->secret_read);
-  printf("Secret keys imported: %i\n", result->secret_imported);
-  printf("Secret keys unchanged: %i\n", result->secret_unchanged);
-  printf("Not imported: %i\n", result->not_imported);
-  printf("Fingerprint: %s\n", result->imports->fpr);
+  log_debug("Considered: %i\n", result->considered);
+  log_debug("No user id: %i\n", result->no_user_id);
+  log_debug("Imported: %i\n", result->imported);
+  log_debug("RSA %i\n", result->imported_rsa);
+  log_debug("Unchanged: %i\n", result->unchanged);
+  log_debug("New user IDs: %i\n", result->new_user_ids);
+  log_debug("New sub keys: %i\n", result->new_sub_keys);
+  log_debug("New signatures: %i\n", result->new_signatures);
+  log_debug("New revocations: %i\n", result->new_revocations);
+  log_debug("Secret keys read: %i\n", result->secret_read);
+  log_debug("Secret keys imported: %i\n", result->secret_imported);
+  log_debug("Secret keys unchanged: %i\n", result->secret_unchanged);
+  log_debug("Not imported: %i\n", result->not_imported);
+  log_debug("Fingerprint: %s\n", result->imports->fpr);
 
   if (!*fingerprint)
     *fingerprint = strndup(result->imports->fpr, 40);
@@ -101,7 +102,6 @@ gpgme_error_t bruteforce_gpg_read_passphrases_from_file(void *hook, const char *
   	    strerror(errno));
     return GPG_ERR_CANCELED;
   }
-  /* printf("%i %lu %s", fd, pthread_self(), data->line); */
   return GPG_ERR_NO_ERROR;
 }
 
@@ -126,7 +126,7 @@ void *bruteforce_gpg_crack_passphrase(void *args) {
     return NULL;
   }
 
-  printf("Context created!\n");
+  log_debug("Context created!\n");
 
   /* Ensure protocol is set to pgp */
   err = gpgme_set_protocol(context, GPGME_PROTOCOL_OPENPGP);
@@ -140,7 +140,7 @@ void *bruteforce_gpg_crack_passphrase(void *args) {
     return NULL;
   }
 
-  printf("Context set to %s\n", gpgme_get_protocol_name(GPGME_PROTOCOL_OPENPGP));
+  log_debug("Context set to %s\n", gpgme_get_protocol_name(GPGME_PROTOCOL_OPENPGP));
 
   /* Set pinentry mode to allow non-interactive reading of passphrase(s) */
   err = gpgme_set_pinentry_mode(context, GPGME_PINENTRY_MODE_LOOPBACK);
@@ -153,7 +153,7 @@ void *bruteforce_gpg_crack_passphrase(void *args) {
     return NULL;
   }
 
-  printf("Pinentry mode set to loopback\n");
+  log_debug("Pinentry mode set to loopback\n");
 
   /*
      Set keylist mode to use local keyring(default) and include secret keys in the first iteration
@@ -168,7 +168,7 @@ void *bruteforce_gpg_crack_passphrase(void *args) {
     return NULL;
   }
 
-  printf("Keylist mode set to local with secret\n");
+  log_debug("Keylist mode set to local with secret\n");
 
   /* Set passphrase callback */
   data = malloc(sizeof(struct callback_data));
@@ -191,7 +191,7 @@ void *bruteforce_gpg_crack_passphrase(void *args) {
     return NULL;
   }
 
-  printf("Got secret key\n");
+  log_debug("Got secret key\n");
 
   /* Set key as signing key */
   err = gpgme_signers_add(context, secret_key);
@@ -205,7 +205,7 @@ void *bruteforce_gpg_crack_passphrase(void *args) {
     return NULL;
   }
 
-  printf("Added secret key as signing key in context\n");
+  log_debug("Added secret key as signing key in context\n");
 
   /* Create buffer of data to sign */
   err = gpgme_data_new_from_mem(&signing_data, "test", 4, 0);
@@ -220,7 +220,7 @@ void *bruteforce_gpg_crack_passphrase(void *args) {
     return NULL;
   }
 
-  printf("Created signing buffer\n");
+  log_debug("Created signing buffer\n");
 
   err = gpgme_data_new(&signature);
   if (gpgme_err_code(err) != GPG_ERR_NO_ERROR) {
@@ -235,7 +235,7 @@ void *bruteforce_gpg_crack_passphrase(void *args) {
     return NULL;
   }
 
-  printf("Created signature buffer\n");
+  log_debug("Created signature buffer\n");
 
   data->attempt = &(gpg_data->attempt);
   data->line = NULL;
@@ -253,9 +253,9 @@ void *bruteforce_gpg_crack_passphrase(void *args) {
     } while (gpgme_err_code(err) == GPG_ERR_BAD_PASSPHRASE && !gpg_data->passphrase);
 
   pthread_mutex_lock(&mutex);
-  if (gpgme_err_code(err) != GPG_ERR_NO_ERROR && !gpg_data->passphrase) {
+  if (gpgme_err_code(err) != GPG_ERR_NO_ERROR) {
     gpgme_strerror_r(err, err_buf, ERR_BUF_LEN);
-    fprintf(stderr, "Secret key decryption failed: %s\n", err_buf);
+    log_debug("\nSecret key decryption failed: %s\n", err_buf);
   }
   else if (data->line && !gpg_data->passphrase) {
     gpg_data->end_time = time(NULL);

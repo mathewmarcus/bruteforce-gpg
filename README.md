@@ -5,7 +5,7 @@ This is a tool used to recover the passphrase of a GPG secret (a.k.a private) ke
 ## Usage
 
 ```
-bruteforce-gpg [-h] [-t NUM_THREADS] -f WORDLIST GPG_SECRET_KEY
+`bruteforce-gpg` [-h] [-t NUM_THREADS] -f WORDLIST GPG_SECRET_KEY
 ```
 
 ## Setup

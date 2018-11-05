@@ -1,13 +1,14 @@
 #include <getopt.h>
 #include "bruteforce_gpg.h"
+#include "log.h"
 
 /*
   TODO:
     1. Disable password caching in gpg-agent
     2. Signal handling
-    3. DEBUG level logging via -v option
 */
 
+int debug;
 int main(int argc, char *argv[argc])
 {
   int option;
@@ -20,8 +21,8 @@ int main(int argc, char *argv[argc])
   time_t start_time;
 
   num_threads = 1;
-  opterr =  0;
-  while ((option = getopt(argc, argv, "hf:t:")) != -1) {
+  debug = opterr = 0;
+  while ((option = getopt(argc, argv, "hvf:t:")) != -1) {
     switch (option) {
       case 'f': {
 	password_filename = optarg;
@@ -42,6 +43,9 @@ int main(int argc, char *argv[argc])
       case 'h':
 	fprintf(stderr, USAGE, argv[0]);
 	exit(0);
+      case 'v':
+	debug = 1;
+	break;
       case ':':
 	fprintf(stderr, "Option %c requires an argument", optopt);
 	exit(1);
@@ -50,13 +54,16 @@ int main(int argc, char *argv[argc])
 	exit(1);
     }
   }
-  printf("%i %i\n", argc, optind);
+
   if (!password_filename || argc-optind != 1) {
     fprintf(stderr, USAGE, argv[0]);
     exit(1);
   }
   secret_key_filename = argv[optind];
-  printf("wordlist: %s\n, key file: %s\n", password_filename, secret_key_filename);
+
+  log_debug("wordlist: %s\nkey file: %s\n",
+	    password_filename,
+	    secret_key_filename);
 
   if (!(gpg_data.wordlist = fopen(password_filename, "r"))) {
     fprintf(stderr,
@@ -78,7 +85,8 @@ int main(int argc, char *argv[argc])
     exit(gpgme_err_code(err));
   }
   
-  printf("%s engine supported!\n", gpgme_get_protocol_name(GPGME_PROTOCOL_OPENPGP));
+  log_debug("%s engine supported!\n",
+	    gpgme_get_protocol_name(GPGME_PROTOCOL_OPENPGP));
 
   gpg_data.fingerprint = NULL;
   if (!bruteforce_gpg_load_secret_key(secret_key_filename, &gpg_data.fingerprint))
@@ -106,10 +114,12 @@ int main(int argc, char *argv[argc])
   
   if (gpg_data.passphrase) {
     printf("\nFound passphrase: %s\n", gpg_data.passphrase);
-    printf("Duration: %lu seconds\n", gpg_data.end_time - start_time);
   }
-  else
-    fprintf(stderr, "Passphrase not found\n");
+  else {
+    gpg_data.end_time = time(NULL);
+    printf("\nPassphrase not found\n");
+  }
+  printf("Duration: %lu seconds\n", gpg_data.end_time - start_time);
 
   fclose(gpg_data.wordlist);
   free(gpg_data.fingerprint);

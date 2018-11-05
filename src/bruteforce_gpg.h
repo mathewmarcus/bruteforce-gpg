@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <pthread.h>
 #include <time.h>
+#include "log.h"
 
 #define USAGE "%s [-h] [-t NUM_THREADS] -f WORDLIST GPG_SECRET_KEY\n"
 #define ERR_BUF_LEN 500
